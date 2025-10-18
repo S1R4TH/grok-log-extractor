@@ -11,10 +11,12 @@ txt / json は補助的な出力です。
 ### Grokログのダウンロード
 
 - https://accounts.x.ai/data からログをダウンロードして解凍
+- **注意**: `prod-grok-backend.json`には個人情報（会話履歴、タイムスタンプなど）が含まれるため、絶対にこのリポジトリにコミットしないでください。`.gitignore`に`prod-grok-backend.json`を追加することを推奨します。
 
 ### Pythonのインストール
 
-- https://www.python.org/ からインストール
+- https://www.python.org/ からPython 3.8以上のバージョンをインストール
+- 依存ライブラリは不要（標準ライブラリのみ使用）
 
 ### スクリプトの配置
 
@@ -26,22 +28,32 @@ txt / json は補助的な出力です。
 
 ### 保存先パスの確認
 
-例：
+例（Windows）:
 
 ```
 C:\Users\ユーザー名\Downloads\解凍したログのフォルダ\ttl\30d\export_data\英数字の羅列\
 ```
 
-### コマンドプロンプトを開く
+### コマンドプロンプト/ターミナルを開く
 
-- Windows検索で `cmd` と入力 → Enter
+- **Windows**: 検索バーで `cmd` と入力 → Enter
+- **macOS/Linux**: アプリケーションから「ターミナル」を開く
 
-### コマンドを実行
+### コマンドを実行(1行ずつ)
 
-```
-cd "C:\Users\ユーザー名\Downloads\解凍したログのフォルダ\ttl\30d\export_data\英数字の羅列\"
-python grok_log_export.py
-```
+- **Windows**:
+
+  ```
+  cd "C:\Users\ユーザー名\Downloads\解凍したログのフォルダ\ttl\30d\export_data\英数字の羅列\"
+  python grok_log_export.py
+  ```
+- **macOS/Linux**:
+
+  ```
+  cd /Users/ユーザー名/Downloads/解凍したログのフォルダ/ttl/30d/export_data/英数字の羅列/
+  python3 grok_log_export.py
+  ```
+  - 注: `python` ではなく `python3` を使用する場合があります（環境依存）。
 
 ## 出力内容
 
@@ -52,6 +64,11 @@ python grok_log_export.py
 ## 注意事項
 
 - タイムスタンプは日本時間（JST）として表示されます
-- Grokの回答ではJST(+9時間)ではないとされますが、確認上はJSTで出力されている可能性が高いです
-- 処理結果に不完全な部分がある場合があります
-- 必要に応じて各自で調整してください
+- Grok公式ではJST(+9h)ではないとされますが、確認上はJSTで出力されている可能性が高いです
+- 処理結果に不完全な部分がある場合があります（例: 連投時のズレ）。必要に応じてコードを調整してください
+- ログファイルは個人情報が含まれるため、共有や公開は厳禁です
+
+## トラブルシューティング
+
+- エラーが出る場合: PythonやGitが正しくインストールされているか確認してください
+- 巨大なログファイルでメモリエラーが出る場合: ログを分割して処理を試してください
