@@ -1,14 +1,22 @@
 import json
 from datetime import datetime
+import html
 
 # JSONファイルの読み込み
-with open('prod-grok-backend.json', 'r', encoding='utf-8') as file:
-    data = json.load(file)
+try:
+    with open('prod-grok-backend.json', 'r', encoding='utf-8') as file:
+        data = json.load(file)
+except FileNotFoundError:
+    print("エラー: prod-grok-backend.json が見つかりません。")
+    exit(1)
+except json.JSONDecodeError:
+    print("エラー: prod-grok-backend.json の形式が正しくありません。")
+    exit(1)
 
 # 各会話から情報を抽出
-for convo in data['conversations']:
-    title = convo['conversation'].get('title', 'Untitled')
-    create_time = convo['conversation'].get('create_time', '1970-01-01T00:00:00Z')
+for convo in data.get('conversations', []):
+    title = convo.get('conversation', {}).get('title', 'Untitled')
+    create_time = convo.get('conversation', {}).get('create_time', '1970-01-01T00:00:00Z')
     
     # 開始日をフォーマット（エラー対策）
     try:
@@ -16,49 +24,49 @@ for convo in data['conversations']:
     except ValueError:
         start_date = '不明な日付'
     
-    # 対話ログを格納するリスト（タイムスタンプ付き）
+    # 対話ログを格納するリスト
     dialogues = []
-    responses = convo['responses']
+    responses = convo.get('conversation', {}).get('responses', []) or convo.get('responses', [])
+    
     i = 0
     while i < len(responses):
         resp = responses[i].get('response', {})
-        sender = resp.get('sender', 'unknown')
+        if not resp:
+            i += 1
+            continue
+        
+        sender = resp.get('sender', 'unknown').lower()
         msg = resp.get('message', '').strip()
         timestamp = resp.get('create_time', {}).get('$date', {}).get('$numberLong', 0)
         time_str = datetime.fromtimestamp(int(timestamp) / 1000).strftime('%Y-%m-%d %H:%M:%S') if timestamp else '不明な時間'
         
-        if sender == 'human':
-            human_msg = msg
-            human_time = time_str
-            assistant_msg = ''
-            assistant_time = '不明な時間'
-            # 次のレスポンスがassistantならペアリング
-            if i + 1 < len(responses) and responses[i + 1].get('response', {}).get('sender') == 'assistant':
-                next_resp = responses[i + 1].get('response', {})
-                assistant_msg = next_resp.get('message', '').strip()
-                assistant_timestamp = next_resp.get('create_time', {}).get('$date', {}).get('$numberLong', 0)
-                assistant_time = datetime.fromtimestamp(int(assistant_timestamp) / 1000).strftime('%Y-%m-%d %H:%M:%S') if assistant_timestamp else '不明な時間'
-                i += 2
-            else:
-                # humanの連投の場合、次のhumanを独立したダイアログとして処理（ループ継続）
-                i += 1
-        elif sender == 'assistant':
-            # assistantが先に来るか、連投の場合: humanを空にしてassistantだけ扱う
-            human_msg = ''
-            human_time = '不明な時間'
-            assistant_msg = msg
-            assistant_time = time_str
+        if sender in ['human', 'assistant']:
+            if sender == 'human':
+                human_msg = msg
+                human_time = time_str
+                assistant_msg = ''
+                assistant_time = '不明な時間'
+            else:  # assistant
+                assistant_msg = msg
+                assistant_time = time_str
+                human_msg = ''
+                human_time = '不明な時間'
+                if dialogues and not dialogues[-1]['assistant']['message']:
+                    dialogues[-1]['assistant'] = {'message': assistant_msg, 'time': assistant_time}
+                    i += 1
+                    continue
+            
+            # 次のレスポンスをチェックして進む
             i += 1
-        else:
-            # 不明なsenderはスキップ
-            i += 1
-            continue
-        
-        if human_msg or assistant_msg:
-            dialogues.append({
-                'human': {'message': human_msg, 'time': human_time},
-                'assistant': {'message': assistant_msg, 'time': assistant_time}
-            })
+            if human_msg or assistant_msg:
+                dialogues.append({
+                    'human': {'message': human_msg, 'time': human_time},
+                    'assistant': {'message': assistant_msg, 'time': assistant_time}
+                })
+    
+    # 空のdialoguesをスキップ
+    if not dialogues:
+        dialogues = [{'human': {'message': '会話データがありません', 'time': start_date}, 'assistant': {'message': '', 'time': '不明な時間'}}]
     
     # テキスト形式で整形
     formatted_text = f'「{title}」\n\n'
@@ -73,19 +81,28 @@ for convo in data['conversations']:
             formatted_text += f'({dialogue["assistant"]["time"]})\n\n'
 
     # テキストファイルを保存
-    with open(f'{title.replace(" ", "_")}.txt', 'w', encoding='utf-8') as text_file:
-        text_file.write(formatted_text)
+    try:
+        with open(f'{title.replace(" ", "_")}.txt', 'w', encoding='utf-8') as text_file:
+            text_file.write(formatted_text)
+    except Exception as e:
+        print(f"エラー: {title}.txt の保存に失敗しました: {e}")
+        continue
 
     # JSONデータを保存
-    json_data = {
-        'チャット開始日': start_date,
-        '会話ログ': dialogues
-    }
-    with open(f'{title.replace(" ", "_")}.json', 'w', encoding='utf-8') as json_file:
-        json.dump(json_data, json_file, ensure_ascii=False, indent=2)
+    try:
+        json_data = {
+            'チャット開始日': start_date,
+            '会話ログ': dialogues
+        }
+        with open(f'{title.replace(" ", "_")}.json', 'w', encoding='utf-8') as json_file:
+            json.dump(json_data, json_file, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"エラー: {title}.json の保存に失敗しました: {e}")
+        continue
 
     # HTML形式でチャットログを生成
-    html_content = f"""<!DOCTYPE html>
+    try:
+        html_content = f"""<!DOCTYPE html>
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
@@ -134,18 +151,19 @@ for convo in data['conversations']:
         <p>チャット開始日: {start_date}</p>
         <div class="chat-log">
 """
-    for dialogue in dialogues:
-        if dialogue['human']['message']:
-            html_content += f'            <div class="message human"><div>{dialogue["human"]["message"]}</div><div class="time">({dialogue["human"]["time"]})</div></div>\n'
-        if dialogue['assistant']['message']:
-            html_content += f'            <div class="message assistant"><div>{dialogue["assistant"]["message"]}</div><div class="time">({dialogue["assistant"]["time"]})</div></div>\n'
-    html_content += """        </div>
+        for dialogue in dialogues:
+            if dialogue['human']['message']:
+                html_content += f'            <div class="message human"><div>{html.escape(dialogue["human"]["message"])}</div><div class="time">({dialogue["human"]["time"]})</div></div>\n'
+            if dialogue['assistant']['message']:
+                html_content += f'            <div class="message assistant"><div>{html.escape(dialogue["assistant"]["message"])}</div><div class="time">({dialogue["assistant"]["time"]})</div></div>\n'
+        html_content += """        </div>
     </div>
 </body>
 </html>"""
-
-    # HTMLファイルを保存
-    with open(f'{title.replace(" ", "_")}.html', 'w', encoding='utf-8') as html_file:
-        html_file.write(html_content)
+        with open(f'{title.replace(" ", "_")}.html', 'w', encoding='utf-8') as html_file:
+            html_file.write(html_content)
+    except Exception as e:
+        print(f"エラー: {title}.html の保存に失敗しました: {e}")
+        continue
 
 print("各チャットがタイトルごとに '.txt', '.json', と '.html' ファイルとして抽出されました。")
