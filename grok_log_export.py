@@ -1,169 +1,298 @@
 import json
 from datetime import datetime
 import html
+import os
+import re
+from collections import defaultdict
 
-# JSONファイルの読み込み
-try:
-    with open('prod-grok-backend.json', 'r', encoding='utf-8') as file:
-        data = json.load(file)
-except FileNotFoundError:
-    print("エラー: prod-grok-backend.json が見つかりません。")
-    exit(1)
-except json.JSONDecodeError:
-    print("エラー: prod-grok-backend.json の形式が正しくありません。")
-    exit(1)
+print("""
+========================================
+Grok Log Extraction Tool
 
-# 各会話から情報を抽出
-for convo in data.get('conversations', []):
+- Extract chat logs by conversation title
+- Split logs by month (txt / json / html)
+- Generate HTML viewer with index
+- Export full combined log files
+
+* Extracts only human/assistant conversation pairs
+* Attachments within chats are not supported
+========================================
+""")
+
+# ===== Load JSON =====
+with open('prod-grok-backend.json', 'r', encoding='utf-8') as f:
+    data = json.load(f)
+
+conversations = data.get('conversations', [])
+total_convos = len(conversations)
+
+# ===== List Available Titles =====
+titles = sorted({
+    c.get('conversation', {}).get('title', '')
+    for c in conversations if c.get('conversation', {}).get('title')
+})
+
+print("\n=== Available Conversations ===")
+for t in titles:
+    print("-", t)
+print("====================\n")
+
+title_filter = input("Enter the chat title to extract (press Enter for all): ").strip()
+
+# ===== CSS =====
+CSS = """
+body {
+    font-family: Arial, sans-serif;
+    max-width: 800px;
+    margin: 0 auto;
+    background-color: #e0e0e0;
+    padding: 20px;
+}
+.chat-container {
+    padding: 0;
+}
+.message {
+    margin: 10px 0;
+    padding: 10px;
+    border-radius: 5px;
+    max-width: 60%;
+    display: block;
+    clear: both;
+}
+.human {
+    background-color: #c0c0c0;
+    float: right;
+}
+.assistant {
+    background-color: #d0d0d0;
+    float: left;
+}
+.time {
+    font-size: 0.8em;
+    color: #808080;
+    margin-top: 5px;
+}
+a, a:visited {
+    color: #000;
+    text-decoration: none;
+}
+.year-box {
+    background-color: #d0d0d0;
+    padding: 15px;
+    margin-bottom: 20px;
+    border-radius: 8px;
+}
+.month-list a {
+    display: inline-block;
+    margin: 5px 10px;
+    font-weight: bold;
+}
+.full-log {
+    display: block;
+    margin-bottom: 20px;
+    font-size: 1.2em;
+    font-weight: bold;
+}
+"""
+
+# ===== Main Process =====
+for idx, convo in enumerate(conversations):
+
+    percent = int((idx + 1) / total_convos * 100)
+    print(f"\rProcessing... {percent}% ({idx+1}/{total_convos})", end="")
+
     title = convo.get('conversation', {}).get('title', 'Untitled')
-    create_time = convo.get('conversation', {}).get('create_time', '1970-01-01T00:00:00Z')
-    
-    # 開始日をフォーマット（エラー対策）
-    try:
-        start_date = datetime.strptime(create_time, '%Y-%m-%dT%H:%M:%S.%fZ').strftime('%Y-%m-%d %H:%M:%S')
-    except ValueError:
-        start_date = '不明な日付'
-    
-    # 対話ログを格納するリスト
-    dialogues = []
+
+    if title_filter and title.lower() != title_filter.lower():
+        continue
+
+    safe_title = re.sub(r'[\\/:*?"<>|]', '_', title)
+
+    txt_dir = os.path.join(safe_title, "txt")
+    json_dir = os.path.join(safe_title, "json")
+    html_dir = os.path.join(safe_title, "html")
+
+    os.makedirs(txt_dir, exist_ok=True)
+    os.makedirs(json_dir, exist_ok=True)
+    os.makedirs(html_dir, exist_ok=True)
+
     responses = convo.get('conversation', {}).get('responses', []) or convo.get('responses', [])
-    
+
+    monthly_logs = defaultdict(list)
+    all_logs = []
+
+    # ===== Extract Logs =====
     i = 0
-    while i < len(responses):
-        resp = responses[i].get('response', {})
-        if not resp:
-            i += 1
-            continue
-        
-        sender = resp.get('sender', 'unknown').lower()
-        msg = resp.get('message', '').strip()
-        timestamp = resp.get('create_time', {}).get('$date', {}).get('$numberLong', 0)
-        time_str = datetime.fromtimestamp(int(timestamp) / 1000).strftime('%Y-%m-%d %H:%M:%S') if timestamp else '不明な時間'
-        
-        if sender in ['human', 'assistant']:
-            if sender == 'human':
-                human_msg = msg
-                human_time = time_str
-                assistant_msg = ''
-                assistant_time = '不明な時間'
-            else:  # assistant
-                assistant_msg = msg
-                assistant_time = time_str
-                human_msg = ''
-                human_time = '不明な時間'
-                if dialogues and not dialogues[-1]['assistant']['message']:
-                    dialogues[-1]['assistant'] = {'message': assistant_msg, 'time': assistant_time}
-                    i += 1
-                    continue
-            
-            # 次のレスポンスをチェックして進む
-            i += 1
-            if human_msg or assistant_msg:
-                dialogues.append({
-                    'human': {'message': human_msg, 'time': human_time},
-                    'assistant': {'message': assistant_msg, 'time': assistant_time}
-                })
-    
-    # 空のdialoguesをスキップ
-    if not dialogues:
-        dialogues = [{'human': {'message': '会話データがありません', 'time': start_date}, 'assistant': {'message': '', 'time': '不明な時間'}}]
-    
-    # テキスト形式で整形
-    formatted_text = f'「{title}」\n\n'
-    formatted_text += f'チャット開始日: {start_date}\n\n'
-    formatted_text += '会話ログ:\n\n'
-    for dialogue in dialogues:
-        if dialogue['human']['message']:
-            formatted_text += f'「{dialogue["human"]["message"]}」\n'
-            formatted_text += f'({dialogue["human"]["time"]})\n\n'
-        if dialogue['assistant']['message']:
-            formatted_text += f'「{dialogue["assistant"]["message"]}」\n'
-            formatted_text += f'({dialogue["assistant"]["time"]})\n\n'
+    while i < len(responses) - 1:
+        r1 = responses[i].get('response', {})
+        r2 = responses[i + 1].get('response', {})
 
-    # テキストファイルを保存
-    try:
-        with open(f'{title.replace(" ", "_")}.txt', 'w', encoding='utf-8') as text_file:
-            text_file.write(formatted_text)
-    except Exception as e:
-        print(f"エラー: {title}.txt の保存に失敗しました: {e}")
+        if r1.get('sender') == 'human' and r2.get('sender') == 'assistant':
+            msg_h = r1.get('message', '').strip()
+            msg_a = r2.get('message', '').strip()
+
+            ts_h = r1.get('create_time', {}).get('$date', {}).get('$numberLong', 0)
+            ts_a = r2.get('create_time', {}).get('$date', {}).get('$numberLong', 0)
+
+            if not ts_h:
+                i += 1
+                continue
+
+            dt_h = datetime.fromtimestamp(int(ts_h) / 1000)
+            dt_a = datetime.fromtimestamp(int(ts_a) / 1000) if ts_a else dt_h
+
+            month = dt_h.strftime('%Y-%m')
+
+            log = {
+                "human": {
+                    "message": msg_h,
+                    "time": dt_h.strftime('%Y-%m-%d %H:%M:%S')
+                },
+                "assistant": {
+                    "message": msg_a,
+                    "time": dt_a.strftime('%Y-%m-%d %H:%M:%S')
+                }
+            }
+
+            monthly_logs[month].append(log)
+            all_logs.append(log)
+
+            i += 2
+        else:
+            i += 1
+
+    if not all_logs:
         continue
 
-    # JSONデータを保存
-    try:
-        json_data = {
-            'チャット開始日': start_date,
-            '会話ログ': dialogues
-        }
-        with open(f'{title.replace(" ", "_")}.json', 'w', encoding='utf-8') as json_file:
-            json.dump(json_data, json_file, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"エラー: {title}.json の保存に失敗しました: {e}")
-        continue
+    months = sorted(monthly_logs.keys())
 
-    # HTML形式でチャットログを生成
-    try:
+    # ===== Monthly Output (TXT / JSON / HTML) =====
+    for month in months:
+        logs = monthly_logs[month]
+
+        # TXT
+        with open(os.path.join(txt_dir, f"{month}.txt"), "w", encoding="utf-8") as f:
+            for d in logs:
+                f.write(f'「{d["human"]["message"]}」\n({d["human"]["time"]})\n')
+                f.write(f'「{d["assistant"]["message"]}」\n({d["assistant"]["time"]})\n\n')
+
+        # JSON
+        with open(os.path.join(json_dir, f"{month}.json"), "w", encoding="utf-8") as f:
+            json.dump(logs, f, ensure_ascii=False, indent=2)
+
+        # HTML
         html_content = f"""<!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>{title}</title>
-    <style>
-        body {{
-            font-family: Arial, sans-serif;
-            max-width: 800px;
-            margin: 0 auto;
-            background-color: #e0e0e0;
-            padding: 20px;
-        }}
-        .chat-container {{
-            padding: 0;
-        }}
-        .message {{
-            margin: 10px 0;
-            padding: 10px;
-            border-radius: 5px;
-            max-width: 60%;
-            display: block;
-            color: #000000;
-            clear: both;
-        }}
-        .human {{
-            background-color: #c0c0c0;
-            float: right;
-            text-align: left;
-        }}
-        .assistant {{
-            background-color: #d0d0d0;
-            float: left;
-            text-align: left;
-        }}
-        .time {{
-            font-size: 0.8em;
-            color: #808080;
-            display: block;
-            margin-top: 5px;
-        }}
-    </style>
+<meta charset="UTF-8">
+<title>{title} - {month}</title>
+<style>{CSS}</style>
 </head>
 <body>
-    <div class="chat-container">
-        <h2>{title}</h2>
-        <p>チャット開始日: {start_date}</p>
-        <div class="chat-log">
+<div class="chat-container">
+<h1>{title}</h1>
+<h2>{month}</h2>
 """
-        for dialogue in dialogues:
-            if dialogue['human']['message']:
-                html_content += f'            <div class="message human"><div>{html.escape(dialogue["human"]["message"])}</div><div class="time">({dialogue["human"]["time"]})</div></div>\n'
-            if dialogue['assistant']['message']:
-                html_content += f'            <div class="message assistant"><div>{html.escape(dialogue["assistant"]["message"])}</div><div class="time">({dialogue["assistant"]["time"]})</div></div>\n'
-        html_content += """        </div>
-    </div>
-</body>
-</html>"""
-        with open(f'{title.replace(" ", "_")}.html', 'w', encoding='utf-8') as html_file:
-            html_file.write(html_content)
-    except Exception as e:
-        print(f"エラー: {title}.html の保存に失敗しました: {e}")
-        continue
 
-print("各チャットがタイトルごとに '.txt', '.json', と '.html' ファイルとして抽出されました。")
+        for d in logs:
+            html_content += f"""
+<div class="message human">
+{html.escape(d["human"]["message"])}
+<div class="time">{d["human"]["time"]}</div>
+</div>
+
+<div class="message assistant">
+{html.escape(d["assistant"]["message"])}
+<div class="time">{d["assistant"]["time"]}</div>
+</div>
+"""
+
+        html_content += "</div></body></html>"
+
+        with open(os.path.join(html_dir, f"{month}.html"), "w", encoding="utf-8") as f:
+            f.write(html_content)
+
+    # ===== index =====
+    year_map = defaultdict(list)
+    for m in months:
+        y, mo = m.split("-")
+        year_map[y].append((int(mo), m))
+
+    index_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>{title}</title>
+<style>{CSS}</style>
+</head>
+<body>
+<div class="chat-container">
+
+<h1>{title}</h1>
+<a class="full-log" href="{safe_title}.html">Full Log</a>
+
+<h2>Monthly Log Index</h2>
+"""
+
+    for y in sorted(year_map.keys()):
+        index_html += f'<div class="year-box"><h3>{y}</h3><div class="month-list">'
+        for mo, full in sorted(year_map[y]):
+            index_html += f'<a href="{full}.html">{mo}</a>'
+        index_html += "</div></div>"
+
+    index_html += "</div></body></html>"
+
+    with open(os.path.join(html_dir, "index.html"), "w", encoding="utf-8") as f:
+        f.write(index_html)
+
+    # ===== Full Log Export =====
+
+    # TXT
+    with open(os.path.join(txt_dir, f"{safe_title}.txt"), "w", encoding="utf-8") as f:
+        for d in all_logs:
+            f.write(f'「{d["human"]["message"]}」\n({d["human"]["time"]})\n')
+            f.write(f'「{d["assistant"]["message"]}」\n({d["assistant"]["time"]})\n\n')
+
+    # JSON
+    with open(os.path.join(json_dir, f"{safe_title}.json"), "w", encoding="utf-8") as f:
+        json.dump(all_logs, f, ensure_ascii=False, indent=2)
+
+    # HTML
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>{title}</title>
+<style>{CSS}</style>
+</head>
+<body>
+<div class="chat-container">
+<h1>{title}</h1>
+<h2>Full Log</h2>
+"""
+
+    for d in all_logs:
+        html_content += f"""
+<div class="message human">
+{html.escape(d["human"]["message"])}
+<div class="time">{d["human"]["time"]}</div>
+</div>
+
+<div class="message assistant">
+{html.escape(d["assistant"]["message"])}
+<div class="time">{d["assistant"]["time"]}</div>
+</div>
+"""
+
+    html_content += "</div></body></html>"
+
+    with open(os.path.join(html_dir, f"{safe_title}.html"), "w", encoding="utf-8") as f:
+        f.write(html_content)
+
+print("\n\nAll tasks completed.")
+
+# Prevent the window from closing immediately when run by double-click
+import sys
+
+if sys.stdin.isatty():
+    input("\nPress Enter to exit...")
